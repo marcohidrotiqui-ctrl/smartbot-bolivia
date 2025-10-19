@@ -7,8 +7,7 @@
   },
   "dependencies": {
     "dotenv": "^16.6.0",
-    "express": "^4.21.1"
-    // Si tu runtime no tiene fetch nativo, agrega:
-    // "node-fetch": "^3.3.2"
+    "express": "^4.21.1",
+    "node-fetch": "^3.3.2"
   }
 }
