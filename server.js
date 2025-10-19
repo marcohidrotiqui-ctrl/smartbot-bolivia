@@ -1,5 +1,5 @@
 // =======================
-// SmartBot Bolivia - Server.js
+// SmartBot Bolivia - Server.js (fix echos/status + Food menu)
 // =======================
 import express from "express";
 import dotenv from "dotenv";
@@ -16,7 +16,7 @@ const GRAPH = "https://graph.facebook.com/v20.0";
 
 // --- UTILIDADES DE ENVÍO ---
 async function sendWhatsApp(body) {
-  const res = await fetch(`${GRAPH}/${PHONE_ID}/messages`, {
+  const res = await fetch(`https://graph.facebook.com/v20.0/${PHONE_ID}/messages`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${TOKEN}`,
@@ -39,8 +39,7 @@ async function sendText(to, text) {
 }
 
 async function sendButtons(to, text, buttons) {
-  // Máximo 3 botones (regla de la API)
-  const safe = buttons.slice(0, 3);
+  const safe = buttons.slice(0, 3); // Máx 3
   return sendWhatsApp({
     messaging_product: "whatsapp",
     to,
@@ -108,21 +107,9 @@ async function sendPlanesList(to) {
     "Selecciona un plan para conocer sus características:",
     "Básico | Pro | Premium",
     [
-      {
-        id: "PLAN_BASIC",
-        title: "Plan Básico",
-        description: "Automatización simple y respuestas rápidas",
-      },
-      {
-        id: "PLAN_PRO",
-        title: "Plan Pro",
-        description: "IA integrada con GPT y funciones avanzadas",
-      },
-      {
-        id: "PLAN_PREMIUM",
-        title: "Plan Premium",
-        description: "Personalización total + IA ilimitada",
-      },
+      { id: "PLAN_BASIC", title: "Plan Básico", description: "Automatización simple y respuestas rápidas" },
+      { id: "PLAN_PRO", title: "Plan Pro", description: "IA integrada con GPT y funciones avanzadas" },
+      { id: "PLAN_PREMIUM", title: "Plan Premium", description: "Personalización total + IA ilimitada" },
     ]
   );
 }
@@ -197,14 +184,20 @@ app.get("/webhook", (req, res) => {
 // --- WEBHOOK RECEIVE ---
 app.post("/webhook", async (req, res) => {
   try {
-    const entry = req.body?.entry?.[0];
-    const msg = entry?.changes?.[0]?.value?.messages?.[0];
-    if (!msg) return res.sendStatus(200);
+    const change = req.body?.entry?.[0]?.changes?.[0]?.value;
+    // 1) Ignora eventos que NO son mensajes (statuses, etc.)
+    if (!change?.messages || change.messages.length === 0) return res.sendStatus(200);
+
+    const msg = change.messages[0];
+
+    // 2) Ignora ECHOS (mensajes enviados por tu propio número)
+    const myPhoneId = change.metadata?.phone_number_id;
+    if (msg.from === myPhoneId) return res.sendStatus(200);
 
     const from = msg.from;
     const type = msg.type;
 
-    // --- MENSAJES INTERACTIVOS ---
+    // 3) INTERACTIVOS (botones / listas)
     if (type === "interactive") {
       const id = msg.interactive?.button_reply?.id || msg.interactive?.list_reply?.id;
 
@@ -221,22 +214,32 @@ app.post("/webhook", async (req, res) => {
 
       // Demos
       if (id === "DEMO_FOOD") {
-        setState(from, { demo: "food", step: "pedido" });
-        return await sendText(from, "🍔 *FoodBot*\nEscribe tu pedido (ej.: 2 salteñas de pollo y 1 jugo).");
-      }
-      if (id === "DEMO_MEDI") {
-        setState(from, { demo: "medi", step: "area" });
-        return await sendText(from, "🏥 *MediBot*\nIndica especialidad (ej.: Odontología, Medicina general).");
-      }
-      if (id === "DEMO_LEGAL") {
-        setState(from, { demo: "legal" });
-        return await sendText(
+        setState(from, { demo: "food", step: "inicio" });
+        return await sendButtons(
           from,
-          "⚖️ *LegalBot GPT (Simulado)*\nPuedes preguntar: “¿Qué pasa si me despiden sin causa?” o “modelo de contrato de alquiler”."
+          "🍔 *FoodBot*\n¿Qué deseas hacer?",
+          [
+            { id: "FOOD_VER_MENU", title: "Ver menú" },
+            { id: "FOOD_ESCRIBIR", title: "Escribir pedido" },
+          ]
         );
       }
-
-      // Confirmaciones
+      if (id === "FOOD_VER_MENU") {
+        setState(from, { demo: "food", step: "pedido" });
+        return await sendText(
+          from,
+          "📋 *Menú del día*\n" +
+            "• Salteña de pollo — 8 Bs\n" +
+            "• Salteña de carne — 8 Bs\n" +
+            "• Jugo de maracuyá — 10 Bs\n" +
+            "• Hamburguesa clásica — 25 Bs\n\n" +
+            "✍️ Escribe tu pedido (ej.: 2 salteñas de pollo y 1 jugo)."
+        );
+      }
+      if (id === "FOOD_ESCRIBIR") {
+        setState(from, { demo: "food", step: "pedido" });
+        return await sendText(from, "✍️ Escribe tu pedido (ej.: 2 salteñas de pollo y 1 jugo).");
+      }
       if (id === "FOOD_OK") {
         const st = getState(from);
         await sendText(from, `✅ Pedido confirmado: "${st.pedido}"\nPronto recibirás tu pedido. ¡Gracias!`);
@@ -245,9 +248,16 @@ app.post("/webhook", async (req, res) => {
       }
       if (id === "FOOD_PAGAR") {
         const st = getState(from);
-        await sendText(from, `💳 Paga tu pedido: https://pagos.smartbot-bo.com/qr?ref=${encodeURIComponent(st.pedido)}`);
+        await sendText(from, `💳 Paga tu pedido: https://pagos.smartbot-bo.com/qr?ref=${encodeURIComponent(
+          st.pedido || "pedido"
+        )}`);
         clearState(from);
         return;
+      }
+
+      if (id === "DEMO_MEDI") {
+        setState(from, { demo: "medi", step: "area" });
+        return await sendText(from, "🏥 *MediBot*\nIndica especialidad (ej.: Odontología, Medicina general).");
       }
       if (id === "MEDI_OK") {
         const st = getState(from);
@@ -259,15 +269,23 @@ app.post("/webhook", async (req, res) => {
         setState(from, { demo: "medi", step: "area" });
         return await sendText(from, "Escribe nuevamente la especialidad para reagendar.");
       }
+
+      if (id === "DEMO_LEGAL") {
+        setState(from, { demo: "legal" });
+        return await sendText(
+          from,
+          "⚖️ *LegalBot GPT (Simulado)*\nPuedes preguntar: “¿Qué pasa si me despiden sin causa?” o “modelo de contrato de alquiler”."
+        );
+      }
     }
 
-    // --- MENSAJES DE TEXTO ---
+    // 4) TEXTO
     if (type === "text") {
       const txtRaw = msg.text.body.trim();
       const txt = txtRaw.toLowerCase();
       const st = getState(from);
 
-      // Comandos rápidos / saludo
+      // Comandos / saludo
       if (["hola", "menu", "inicio", "start", "smartbot"].includes(txt)) return await sendMainMenu(from);
       if (txt === "planes") return await sendPlanesList(from);
       if (txt === "demos") return await sendDemosMenu(from);
@@ -308,14 +326,16 @@ app.post("/webhook", async (req, res) => {
         );
       }
 
-      // Fallback
-      return await sendMainMenu(from);
+      // Fallback amable (sin spam)
+      await sendText(from, "No entendí. Escribe *hola* para ver el menú principal o *demos* para probar.");
+      return res.sendStatus(200);
     }
 
-    res.sendStatus(200);
+    // Si llegó un tipo no soportado, no responder.
+    return res.sendStatus(200);
   } catch (err) {
     console.error("Error:", err);
-    res.sendStatus(200);
+    return res.sendStatus(200);
   }
 });
 
