@@ -1,6 +1,6 @@
-// =======================
-// SmartBot Bolivia - Server.js (fix echos/status + Food menu)
-// =======================
+// ===================================================
+// SMARTBOT BOLIVIA - VERSIÓN ANTI BUCLE 2025
+// ===================================================
 import express from "express";
 import dotenv from "dotenv";
 dotenv.config();
@@ -8,15 +8,14 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
-// --- CONFIGURACIONES GLOBALES ---
 const TOKEN = process.env.WABA_TOKEN || process.env.WHATSAPP_TOKEN;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "smartbot-verify-123";
 const PHONE_ID = process.env.WABA_PHONE_ID;
 const GRAPH = "https://graph.facebook.com/v20.0";
 
-// --- UTILIDADES DE ENVÍO ---
+// --- UTILIDAD PARA ENVIAR MENSAJES ---
 async function sendWhatsApp(body) {
-  const res = await fetch(`https://graph.facebook.com/v20.0/${PHONE_ID}/messages`, {
+  const res = await fetch(`${GRAPH}/${PHONE_ID}/messages`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${TOKEN}`,
@@ -39,7 +38,7 @@ async function sendText(to, text) {
 }
 
 async function sendButtons(to, text, buttons) {
-  const safe = buttons.slice(0, 3); // Máx 3
+  const safe = buttons.slice(0, 3);
   return sendWhatsApp({
     messaging_product: "whatsapp",
     to,
@@ -57,40 +56,17 @@ async function sendButtons(to, text, buttons) {
   });
 }
 
-async function sendList(to, header, body, footer, rows) {
-  return sendWhatsApp({
-    messaging_product: "whatsapp",
-    to,
-    type: "interactive",
-    interactive: {
-      type: "list",
-      header: { type: "text", text: header },
-      body: { text: body },
-      footer: { text: footer },
-      action: {
-        button: "Ver opciones",
-        sections: [
-          {
-            title: "Planes disponibles",
-            rows: rows.map((r) => ({
-              id: r.id,
-              title: r.title,
-              description: r.description,
-            })),
-          },
-        ],
-      },
-    },
-  });
-}
+// --- ESTADOS EN MEMORIA ---
+const state = new Map();
+const setState = (to, data) => state.set(to, { ...(state.get(to) || {}), ...data });
+const getState = (to) => state.get(to) || {};
+const clearState = (to) => state.delete(to);
 
-// --- SALUDO PRINCIPAL ---
+// --- MENÚ PRINCIPAL ---
 async function sendMainMenu(to) {
   return sendButtons(
     to,
-    "🤖 *Bienvenido a SmartBot Bolivia*\n" +
-      "Descubre cómo la IA puede transformar tu negocio.\n\n" +
-      "Selecciona una opción:",
+    "🤖 *Bienvenido a SmartBot Bolivia*\nDescubre cómo la IA puede transformar tu negocio.\n\nSelecciona una opción:",
     [
       { id: "MENU_PLANES", title: "📦 Planes" },
       { id: "MENU_DEMOS", title: "🎬 Demos" },
@@ -100,64 +76,35 @@ async function sendMainMenu(to) {
 }
 
 // --- PLANES ---
-async function sendPlanesList(to) {
-  return sendList(
+async function sendPlanes(to) {
+  return sendButtons(
     to,
     "📦 *Planes SmartBot Bolivia*",
-    "Selecciona un plan para conocer sus características:",
-    "Básico | Pro | Premium",
     [
-      { id: "PLAN_BASIC", title: "Plan Básico", description: "Automatización simple y respuestas rápidas" },
-      { id: "PLAN_PRO", title: "Plan Pro", description: "IA integrada con GPT y funciones avanzadas" },
-      { id: "PLAN_PREMIUM", title: "Plan Premium", description: "Personalización total + IA ilimitada" },
+      { id: "PLAN_BASIC", title: "Básico" },
+      { id: "PLAN_PRO", title: "Pro" },
+      { id: "PLAN_PREMIUM", title: "Premium" },
     ]
   );
 }
 
-async function replyPlan(to, plan) {
-  if (plan === "basic")
-    return sendText(
-      to,
-      "🔹 *Plan Básico*\n" +
-        "• Respuestas automáticas 24/7\n" +
-        "• Menús interactivos con botones\n" +
-        "• Integración WhatsApp Business API\n" +
-        "👔 Ideal para: restaurantes, tiendas, servicios personales.\n\n" +
-        "💰 Precio: desde 150 Bs/mes."
-    );
-
-  if (plan === "pro")
-    return sendText(
-      to,
-      "🔷 *Plan Pro*\n" +
-        "• IA con GPT (consultas inteligentes)\n" +
-        "• Flujos personalizados y almacenamiento de datos\n" +
-        "• Hasta 5.000 interacciones mensuales\n" +
-        "🍽️⚖️ Ideal para: clínicas, estudios legales, negocios medianos.\n\n" +
-        "💰 Precio: desde 300 Bs/mes."
-    );
-
-  if (plan === "premium")
-    return sendText(
-      to,
-      "🔶 *Plan Premium*\n" +
-        "• IA avanzada ilimitada (GPT + API externas)\n" +
-        "• Diseño de flujos empresariales + CRM + pagos QR\n" +
-        "• Integraciones completas a medida\n" +
-        "🏢 Ideal para: empresas grandes y franquicias.\n\n" +
-        "💰 Precio: personalizado según proyecto."
-    );
+async function replyPlan(to, id) {
+  const plans = {
+    PLAN_BASIC:
+      "🔹 *Plan Básico*\n• Respuestas automáticas 24/7\n• Menús con botones\n• Integración WhatsApp Business\n💰 Desde 150 Bs/mes.",
+    PLAN_PRO:
+      "🔷 *Plan Pro*\n• IA con GPT integrada\n• Flujos personalizados\n• 5000 interacciones/mes\n💰 Desde 300 Bs/mes.",
+    PLAN_PREMIUM:
+      "🔶 *Plan Premium*\n• IA avanzada ilimitada\n• CRM + Pagos QR + integraciones\n💰 Precio personalizado.",
+  };
+  return sendText(to, plans[id]);
 }
 
 // --- DEMOS ---
-async function sendDemosMenu(to) {
+async function sendDemos(to) {
   return sendButtons(
     to,
-    "🎬 *Demos disponibles:*\n" +
-      "• FoodBot 🍔 — pedidos y pago QR\n" +
-      "• MediBot 🏥 — citas y orientación médica\n" +
-      "• LegalBot GPT ⚖️ — consultas legales con IA\n\n" +
-      "Selecciona una demo para probar:",
+    "🎬 *Demos disponibles:*\n• FoodBot 🍔 — pedidos y pago QR\n• MediBot 🏥 — citas médicas\n• LegalBot GPT ⚖️ — consultas legales con IA",
     [
       { id: "DEMO_FOOD", title: "🍔 FoodBot" },
       { id: "DEMO_MEDI", title: "🏥 MediBot" },
@@ -165,12 +112,6 @@ async function sendDemosMenu(to) {
     ]
   );
 }
-
-// --- ESTADOS EN MEMORIA ---
-const state = new Map();
-const setState = (to, data) => state.set(to, { ...(state.get(to) || {}), ...data });
-const getState = (to) => state.get(to) || {};
-const clearState = (to) => state.delete(to);
 
 // --- WEBHOOK VERIFY ---
 app.get("/webhook", (req, res) => {
@@ -181,166 +122,135 @@ app.get("/webhook", (req, res) => {
   res.sendStatus(403);
 });
 
-// --- WEBHOOK RECEIVE ---
+// --- WEBHOOK POST ---
 app.post("/webhook", async (req, res) => {
   try {
     const change = req.body?.entry?.[0]?.changes?.[0]?.value;
-    // 1) Ignora eventos que NO son mensajes (statuses, etc.)
     if (!change?.messages || change.messages.length === 0) return res.sendStatus(200);
 
     const msg = change.messages[0];
 
-    // 2) Ignora ECHOS (mensajes enviados por tu propio número)
-    const myPhoneId = change.metadata?.phone_number_id;
-    if (msg.from === myPhoneId) return res.sendStatus(200);
+    // 🔥 FILTRO ANTI BUCLE 🔥
+    if (msg.statuses || msg.type === "unsupported") return res.sendStatus(200);
+    if (msg.from === change.metadata?.phone_number_id) return res.sendStatus(200);
+    if (msg.id && msg.id.startsWith("wamid.")) {
+      if (msg.id.includes("echo") || msg.id.includes("wamid")) return res.sendStatus(200);
+    }
 
     const from = msg.from;
     const type = msg.type;
 
-    // 3) INTERACTIVOS (botones / listas)
+    // BOTONES
     if (type === "interactive") {
-      const id = msg.interactive?.button_reply?.id || msg.interactive?.list_reply?.id;
+      const id = msg.interactive?.button_reply?.id;
+      const st = getState(from);
 
-      // Menú principal
-      if (id === "MENU_PLANES") return await sendPlanesList(from);
-      if (id === "MENU_DEMOS") return await sendDemosMenu(from);
-      if (id === "MENU_ASESOR")
-        return await sendText(from, "🧑‍💼 Nuestro asesor te atiende en *+591 72296430*.");
+      if (id.startsWith("MENU_")) {
+        if (id === "MENU_PLANES") return sendPlanes(from);
+        if (id === "MENU_DEMOS") return sendDemos(from);
+        if (id === "MENU_ASESOR")
+          return sendText(from, "📞 Contacta con un asesor en *+591 72296430*.");
+      }
 
-      // Planes
-      if (id === "PLAN_BASIC") return await replyPlan(from, "basic");
-      if (id === "PLAN_PRO") return await replyPlan(from, "pro");
-      if (id === "PLAN_PREMIUM") return await replyPlan(from, "premium");
+      if (id.startsWith("PLAN_")) return replyPlan(from, id);
 
-      // Demos
+      // --- Demos ---
       if (id === "DEMO_FOOD") {
-        setState(from, { demo: "food", step: "inicio" });
-        return await sendButtons(
+        setState(from, { demo: "food" });
+        return sendButtons(from, "🍔 *FoodBot*\n¿Qué deseas hacer?", [
+          { id: "FOOD_MENU", title: "Ver menú" },
+          { id: "FOOD_PEDIDO", title: "Hacer pedido" },
+        ]);
+      }
+
+      if (id === "FOOD_MENU") {
+        setState(from, { demo: "food", step: "pedido" });
+        return sendText(
           from,
-          "🍔 *FoodBot*\n¿Qué deseas hacer?",
-          [
-            { id: "FOOD_VER_MENU", title: "Ver menú" },
-            { id: "FOOD_ESCRIBIR", title: "Escribir pedido" },
-          ]
+          "📋 *Menú del día*\n• Salteña de pollo — 8 Bs\n• Hamburguesa — 25 Bs\n• Jugo de maracuyá — 10 Bs\n\n✍️ Escribe tu pedido."
         );
       }
-      if (id === "FOOD_VER_MENU") {
-        setState(from, { demo: "food", step: "pedido" });
-        return await sendText(
-          from,
-          "📋 *Menú del día*\n" +
-            "• Salteña de pollo — 8 Bs\n" +
-            "• Salteña de carne — 8 Bs\n" +
-            "• Jugo de maracuyá — 10 Bs\n" +
-            "• Hamburguesa clásica — 25 Bs\n\n" +
-            "✍️ Escribe tu pedido (ej.: 2 salteñas de pollo y 1 jugo)."
-        );
-      }
-      if (id === "FOOD_ESCRIBIR") {
-        setState(from, { demo: "food", step: "pedido" });
-        return await sendText(from, "✍️ Escribe tu pedido (ej.: 2 salteñas de pollo y 1 jugo).");
-      }
+
       if (id === "FOOD_OK") {
         const st = getState(from);
-        await sendText(from, `✅ Pedido confirmado: "${st.pedido}"\nPronto recibirás tu pedido. ¡Gracias!`);
-        clearState(from);
-        return;
-      }
-      if (id === "FOOD_PAGAR") {
-        const st = getState(from);
-        await sendText(from, `💳 Paga tu pedido: https://pagos.smartbot-bo.com/qr?ref=${encodeURIComponent(
-          st.pedido || "pedido"
-        )}`);
+        sendText(from, `✅ Pedido confirmado: ${st.pedido}`);
         clearState(from);
         return;
       }
 
       if (id === "DEMO_MEDI") {
         setState(from, { demo: "medi", step: "area" });
-        return await sendText(from, "🏥 *MediBot*\nIndica especialidad (ej.: Odontología, Medicina general).");
+        return sendText(from, "🏥 *MediBot*\nIndica especialidad (ej.: Odontología).");
       }
+
       if (id === "MEDI_OK") {
         const st = getState(from);
-        await sendText(from, `✅ Cita confirmada en *${st.area}* el *${st.fecha}*. ¡Te esperamos!`);
+        sendText(from, `✅ Cita confirmada en *${st.area}* el *${st.fecha}*.`);
         clearState(from);
         return;
-      }
-      if (id === "MEDI_EDIT") {
-        setState(from, { demo: "medi", step: "area" });
-        return await sendText(from, "Escribe nuevamente la especialidad para reagendar.");
       }
 
       if (id === "DEMO_LEGAL") {
         setState(from, { demo: "legal" });
-        return await sendText(
+        return sendText(
           from,
-          "⚖️ *LegalBot GPT (Simulado)*\nPuedes preguntar: “¿Qué pasa si me despiden sin causa?” o “modelo de contrato de alquiler”."
+          "⚖️ *LegalBot GPT*\nEscribe tu consulta legal.\nEjemplo: “¿Qué pasa si me despiden sin causa?”"
         );
       }
     }
 
-    // 4) TEXTO
+    // TEXTO
     if (type === "text") {
-      const txtRaw = msg.text.body.trim();
-      const txt = txtRaw.toLowerCase();
+      const txt = msg.text.body.trim().toLowerCase();
       const st = getState(from);
 
-      // Comandos / saludo
-      if (["hola", "menu", "inicio", "start", "smartbot"].includes(txt)) return await sendMainMenu(from);
-      if (txt === "planes") return await sendPlanesList(from);
-      if (txt === "demos") return await sendDemosMenu(from);
+      if (["hola", "menu", "inicio"].includes(txt)) return sendMainMenu(from);
+      if (txt === "planes") return sendPlanes(from);
+      if (txt === "demos") return sendDemos(from);
 
-      // FoodBot
-      if (st.demo === "food") {
-        if (st.step === "pedido") {
-          setState(from, { step: "confirmar", pedido: txtRaw });
-          return await sendButtons(from, `¿Confirmas este pedido?\n"${txtRaw}"`, [
-            { id: "FOOD_OK", title: "OK" },
-            { id: "FOOD_PAGAR", title: "PAGAR" },
-          ]);
-        }
+      // FOODBOT
+      if (st.demo === "food" && st.step === "pedido") {
+        setState(from, { step: "confirmar", pedido: msg.text.body });
+        return sendButtons(from, `Confirmar pedido: "${msg.text.body}"`, [
+          { id: "FOOD_OK", title: "OK" },
+        ]);
       }
 
-      // MediBot
+      // MEDIBOT
       if (st.demo === "medi") {
         if (st.step === "area") {
-          setState(from, { step: "fecha", area: txtRaw });
-          return await sendText(from, "📅 Indica la fecha y hora de la cita (ej.: 22/10 15:00).");
+          setState(from, { step: "fecha", area: msg.text.body });
+          return sendText(from, "📅 Indica la fecha (ej.: 21/10 15:00).");
         }
         if (st.step === "fecha") {
-          setState(from, { step: "confirmar", fecha: txtRaw });
-          return await sendButtons(from, `Confirmar cita en *${st.area}* el *${txtRaw}*`, [
+          setState(from, { step: "confirmar", fecha: msg.text.body });
+          return sendButtons(from, `Confirmar cita en *${st.area}* el *${msg.text.body}*`, [
             { id: "MEDI_OK", title: "OK" },
-            { id: "MEDI_EDIT", title: "Editar" },
           ]);
         }
       }
 
-      // LegalBot (demo IA)
+      // LEGALBOT
       if (st.demo === "legal") {
-        return await sendText(
+        return sendText(
           from,
-          `🧠 *LegalBot IA (demo)*\nTu consulta: "${txtRaw}"\n\n` +
-            "Respuesta ejemplo:\nSegún la normativa laboral boliviana, el despido sin causa da derecho a indemnización más beneficios sociales. " +
-            "Para un documento, el Plan Pro/Premium integra GPT con redacción conforme a ley."
+          `🧠 *Respuesta IA simulada:*\nTu consulta: "${msg.text.body}"\n\n👉 En Plan Pro o Premium, LegalBot usa GPT para redactar documentos conforme a ley boliviana.`
         );
       }
 
-      // Fallback amable (sin spam)
-      await sendText(from, "No entendí. Escribe *hola* para ver el menú principal o *demos* para probar.");
-      return res.sendStatus(200);
+      // fallback
+      return sendText(from, "No entendí. Escribe *hola* para volver al menú principal.");
     }
 
-    // Si llegó un tipo no soportado, no responder.
-    return res.sendStatus(200);
-  } catch (err) {
-    console.error("Error:", err);
-    return res.sendStatus(200);
+    res.sendStatus(200);
+  } catch (e) {
+    console.error("❌ Error general:", e);
+    res.sendStatus(200);
   }
 });
 
 // --- HEALTHCHECK ---
-app.get("/", (req, res) => res.send("✅ SmartBot Bolivia corriendo correctamente."));
+app.get("/", (_, res) => res.send("✅ SmartBot Bolivia corriendo sin bucles"));
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`🚀 SmartBot Bolivia activo en puerto ${PORT}`));
