@@ -1,15 +1,30 @@
 {
-  "name": "smartbot-bolivia-2025",
-  "version": "1.0.0",
+  "name": "smartbot-bolivia",
+  "version": "2.0.0",
+  "description": "SmartBot Bolivia - Bot empresarial con IA para WhatsApp (FoodBot, MediBot y LegalBot GPT).",
+  "main": "server.js",
   "type": "module",
   "scripts": {
     "start": "node server.js"
   },
+  "keywords": [
+    "whatsapp-bot",
+    "smartbot",
+    "express",
+    "bolivia",
+    "meta-api",
+    "chatbot",
+    "foodbot",
+    "medibot",
+    "legalbot"
+  ],
+  "author": "SmartBot Bolivia",
+  "license": "MIT",
   "dependencies": {
     "dotenv": "^16.4.5",
     "express": "^4.21.1"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=18.0.0"
   }
 }
