@@ -1,5 +1,6 @@
 // ===================================================
-// SMARTBOT BOLIVIA - Estable + Botón "Volver al menú"
+// SMARTBOT BOLIVIA - IA que potencia tu negocio
+// Estable + Demos guiados + FoodBot con Delivery/Local + QR
 // ===================================================
 import express from "express";
 import dotenv from "dotenv";
@@ -8,126 +9,292 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
+// ---------- Config ----------
 const TOKEN        = process.env.WABA_TOKEN || process.env.WHATSAPP_TOKEN;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "smartbot-verify-123";
 const PHONE_ID     = process.env.WABA_PHONE_ID;
 const GRAPH        = "https://graph.facebook.com/v20.0";
+const PAYMENT_QR   = process.env.PAYMENT_QR_URL || "https://via.placeholder.com/500x500.png?text=QR+de+Pago";
 
-// ---------------- Anti-duplicados (evita reintentos / bucles) ----------------
-const seenIds = new Map(); // wamid -> timestamp
-const SEEN_MAX = 500;
-function remember(id) {
-  seenIds.set(id, Date.now());
-  if (seenIds.size > SEEN_MAX) {
-    // elimina el más antiguo
-    const oldestKey = [...seenIds.entries()].sort((a, b) => a[1] - b[1])[0][0];
-    seenIds.delete(oldestKey);
-  }
-}
-function alreadySeen(id) {
-  return seenIds.has(id);
+// ---------- Anti-duplicados / anti-echo ----------
+const seen = new Set();
+function dedupe(id) {
+  if (!id) return false;
+  if (seen.has(id)) return true;
+  seen.add(id);
+  if (seen.size > 800) seen.clear();
+  return false;
 }
 
-// ---------------- Utilidades de envío ----------------
-async function sendWhatsApp(body) {
+// ---------- Envío WhatsApp ----------
+async function wa(body) {
   const res = await fetch(`${GRAPH}/${PHONE_ID}/messages`, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${TOKEN}`,
-      "Content-Type": "application/json",
-    },
+    headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
   const data = await res.json();
   console.log("WA:", res.status, JSON.stringify(data));
   return data;
 }
+const sendText = (to, text) =>
+  wa({ messaging_product: "whatsapp", to, type: "text", text: { body: text } });
 
-function sendText(to, text) {
-  return sendWhatsApp({
-    messaging_product: "whatsapp",
-    to,
-    type: "text",
-    text: { body: text },
-  });
-}
-
-function sendButtons(to, text, buttons) {
-  // WhatsApp permite 1-3 botones
-  const safe = buttons.slice(0, 3).map((b) => ({
-    type: "reply",
-    reply: { id: b.id, title: b.title },
-  }));
-  return sendWhatsApp({
+const sendButtons = (to, text, buttons) =>
+  wa({
     messaging_product: "whatsapp",
     to,
     type: "interactive",
     interactive: {
       type: "button",
       body: { text },
-      action: { buttons: safe },
+      action: {
+        buttons: buttons.slice(0, 3).map(b => ({ type: "reply", reply: { id: b.id, title: b.title } })),
+      },
     },
   });
-}
 
-// ---------------- Estado en memoria ----------------
-const state = new Map();
-const setState  = (to, data) => state.set(to, { ...(state.get(to) || {}), ...data });
-const getState  = (to) => state.get(to) || {};
-const clearState= (to) => state.delete(to);
-
-// ---------------- Menús ----------------
-function sendMainMenu(to) {
-  clearState(to); // limpiar cualquier flujo previo
-  return sendButtons(
+const sendImage = (to, url, caption = "") =>
+  wa({
+    messaging_product: "whatsapp",
     to,
-    "🤖 *Bienvenido a SmartBot Bolivia*\nSelecciona una opción:",
-    [
-      { id: "MENU_PLANES", title: "📦 Planes" },
-      { id: "MENU_DEMOS",  title: "🎬 Demos"  },
-      { id: "MENU_ASESOR", title: "🧑‍💼 Asesor" },
-    ]
+    type: "image",
+    image: { link: url, caption },
+  });
+
+// ---------- Estado ----------
+const S = new Map();
+const g = (id) => S.get(id) || {};
+const set = (id, patch) => S.set(id, { ...g(id), ...patch });
+const clear = (id) => S.delete(id);
+
+// ---------- Menús básicos ----------
+function mainGreeting() {
+  return (
+    "🤖 *SmartBot Bolivia*\n" +
+    "Transforma tus mensajes en *ventas 24/7* con *IA*. Automatiza respuestas, agenda citas, toma pedidos y cobra con *QR*.\n\n" +
+    "Elige una opción:"
   );
 }
 
-function sendPlanes(to) {
-  return sendButtons(
-    to,
-    "📦 *Planes SmartBot Bolivia*",
-    [
-      { id: "PLAN_BASIC",   title: "Básico"   },
-      { id: "PLAN_PRO",     title: "Pro"      },
-      { id: "PLAN_PREMIUM", title: "Premium"  },
-    ]
-  );
-}
-
-function replyPlan(to, id) {
-  const plans = {
+function planesText(id) {
+  const map = {
     PLAN_BASIC:
-      "🔹 *Plan Básico*\n• Respuestas automáticas 24/7\n• Menús con botones\n• WhatsApp Business\n💰 Desde 150 Bs/mes.",
+      "🔹 *Plan Básico*\n" +
+      "• Respuestas automáticas preconfiguradas 24/7\n" +
+      "• Menús con botones en WhatsApp\n" +
+      "• Ideal para negocios pequeños\n" +
+      "💰 Desde *150 Bs/mes*.",
     PLAN_PRO:
-      "🔷 *Plan Pro*\n• IA con GPT integrada\n• Flujos personalizados\n• Hasta 5.000 interacciones/mes\n💰 Desde 300 Bs/mes.",
+      "🔷 *Plan Pro*\n" +
+      "• *IA conversacional (GPT)* que entiende preguntas reales\n" +
+      "• Flujos y formularios personalizados\n" +
+      "• Hasta *5.000* interacciones/mes\n" +
+      "💰 Desde *300 Bs/mes*.",
     PLAN_PREMIUM:
-      "🔶 *Plan Premium*\n• IA avanzada ilimitada\n• CRM + Pagos QR + integraciones\n💰 Precio personalizado.",
+      "🔶 *Plan Premium*\n" +
+      "• IA avanzada *ilimitada*\n" +
+      "• Integraciones (CRM, pagos, catálogos) + análisis\n" +
+      "• Soporte prioritario\n" +
+      "💰 Precio *personalizado*.",
   };
-  return sendText(to, plans[id]);
+  return map[id] || "";
 }
 
-function sendDemos(to) {
-  clearState(to);
+const BTN_BACK = { id: "MENU_BACK", title: "🔙 Volver al menú" };
+
+function menuPrincipal(to) {
+  clear(to);
+  return sendButtons(to, mainGreeting(), [
+    { id: "MENU_PLANES", title: "📦 Planes" },
+    { id: "MENU_DEMOS",  title: "🎬 Demos"  },
+    { id: "MENU_ASESOR", title: "🧑‍💼 Asesor" },
+  ]);
+}
+
+function menuPlanes(to) {
+  return sendButtons(to, "📦 *Planes SmartBot Bolivia* (toca uno para ver detalles)", [
+    { id: "PLAN_BASIC",   title: "Básico"   },
+    { id: "PLAN_PRO",     title: "Pro"      },
+    { id: "PLAN_PREMIUM", title: "Premium"  },
+  ]);
+}
+
+function menuDemos(to) {
+  clear(to);
   return sendButtons(
     to,
-    "🎬 *Demos disponibles:*\n• FoodBot 🍔 — pedidos y pago QR\n• MediBot 🏥 — citas médicas\n• LegalBot GPT ⚖️ — consultas legales con IA",
+    "🎬 *Demos disponibles*\n" +
+    "• *FoodBot* 🍔: toma pedidos, delivery, pago QR\n" +
+    "• *MediBot* 🏥: agenda citas en segundos\n" +
+    "• *LegalBot GPT* ⚖️: consultas con IA (simulada en demo)",
     [
-      { id: "DEMO_FOOD",  title: "🍔 FoodBot"  },
-      { id: "DEMO_MEDI",  title: "🏥 MediBot"  },
-      { id: "DEMO_LEGAL", title: "⚖️ LegalBot" },
+      { id: "DEMO_FOOD_INTRO",  title: "🍔 Probar FoodBot"  },
+      { id: "DEMO_MEDI_INTRO",  title: "🏥 Probar MediBot"  },
+      { id: "DEMO_LEGAL_INTRO", title: "⚖️ Probar LegalBot" },
     ]
   );
 }
 
-// ---------------- Webhook VERIFY ----------------
+// ---------- Demos: Intro guiada ----------
+async function demoFoodIntro(to) {
+  set(to, { demo: "food", step: "intro" });
+  await sendText(
+    to,
+    "🍔 *FoodBot* te ayuda a recibir pedidos automáticamente.\n" +
+    "Flujo: Ver menú → Hacer pedido → Retiro en local o Delivery → Pago por QR → Confirmación.\n"
+  );
+  return sendButtons(to, "¿Qué deseas hacer?", [
+    { id: "FOOD_MENU",   title: "📋 Ver menú" },
+    { id: "FOOD_PEDIDO", title: "🛒 Hacer pedido" },
+    BTN_BACK,
+  ]);
+}
+
+async function demoMediIntro(to) {
+  set(to, { demo: "medi", step: "intro" });
+  await sendText(
+    to,
+    "🏥 *MediBot* agenda citas sin llamadas.\n" +
+    "Flujo: Especialidad → Fecha/Hora → Confirmación. ¡Listo!\n"
+  );
+  return sendButtons(to, "Empezamos:", [
+    { id: "MEDI_AREA", title: "Elegir especialidad" },
+    BTN_BACK,
+  ]);
+}
+
+async function demoLegalIntro(to) {
+  set(to, { demo: "legal", step: "intro" });
+  await sendText(
+    to,
+    "⚖️ *LegalBot GPT* contesta consultas legales con IA.\n" +
+    "En el *Plan Pro/Premium* usa GPT para responder y redactar documentos bajo normativa boliviana.\n"
+  );
+  return sendButtons(to, "Escribe tu consulta (demo simulada):", [BTN_BACK]);
+}
+
+// ---------- FoodBot ----------
+const MENU_FOOD =
+  "📋 *Menú del día*\n" +
+  "• Salteña — 8 Bs\n" +
+  "• Hamburguesa Clásica — 25 Bs\n" +
+  "• Hamburguesa Doble — 32 Bs\n" +
+  "• Papas Fritas — 12 Bs\n" +
+  "• Jugo Natural — 10 Bs\n" +
+  "• Refresco — 8 Bs\n\n" +
+  "✍️ *Escribe tu pedido* (ej.: “2 salteñas y 1 jugo”)";
+
+async function foodShowMenu(to) {
+  set(to, { demo: "food", step: "pedido" });
+  return sendButtons(to, MENU_FOOD, [{ id: "FOOD_TIPEAR", title: "📝 Escribir pedido" }, BTN_BACK]);
+}
+
+async function foodAskPedido(to) {
+  set(to, { demo: "food", step: "pedido" });
+  return sendButtons(
+    to,
+    "🛒 ¿Qué deseas pedir? Escribe cantidad + producto (ej.: “1 clásica y 1 jugo”).",
+    [BTN_BACK]
+  );
+}
+
+async function foodAfterPedido(to, pedidoTexto) {
+  set(to, { demo: "food", step: "modo", pedido: pedidoTexto });
+  return sendButtons(
+    to,
+    `Confirmo tu pedido: *${pedidoTexto}*.\n¿Cómo lo recibes?`,
+    [
+      { id: "FOOD_LOCAL",    title: "🏪 Retiro en local" },
+      { id: "FOOD_DELIVERY", title: "🚚 Delivery" },
+    ]
+  );
+}
+
+async function foodAskHoraLocal(to) {
+  set(to, { step: "hora_local" });
+  return sendButtons(to, "⏰ ¿A qué hora pasarás a recoger? (ej.: 12:30)", [BTN_BACK]);
+}
+
+async function foodAskDireccion(to) {
+  set(to, { step: "direccion" });
+  return sendButtons(to, "📍 Comparte la *dirección completa* y una *referencia* por favor.", [BTN_BACK]);
+}
+
+async function foodConfirmAndPayLocal(to, hora) {
+  const st = g(to);
+  set(to, { step: "pago_local", hora_local: hora });
+  await sendText(
+    to,
+    `✅ *Pedido listo para retiro*\n` +
+    `• Pedido: *${st.pedido}*\n` +
+    `• Retiro: *${hora}*\n`
+  );
+  await sendImage(to, PAYMENT_QR, "🔗 Escanea el QR para pagar");
+  return sendButtons(to, "Cuando realices el pago, confirma:", [
+    { id: "FOOD_PAGADO", title: "✅ Pagado" },
+    BTN_BACK,
+  ]);
+}
+
+async function foodConfirmAndPayDelivery(to, direccionTexto) {
+  const st = g(to);
+  set(to, { step: "pago_delivery", direccion: direccionTexto });
+  await sendText(
+    to,
+    `✅ *Pedido con delivery*\n` +
+    `• Pedido: *${st.pedido}*\n` +
+    `• Dirección: *${direccionTexto}*\n` +
+    `Un repartidor se asignará tras el pago.`
+  );
+  await sendImage(to, PAYMENT_QR, "🔗 Escanea el QR para pagar");
+  return sendButtons(to, "Cuando realices el pago, confirma:", [
+    { id: "FOOD_PAGADO", title: "✅ Pagado" },
+    BTN_BACK,
+  ]);
+}
+
+async function foodFinish(to) {
+  clear(to);
+  await sendText(to, "🎉 ¡Gracias! Tu pago fue recibido. Estamos procesando tu pedido.");
+  return sendButtons(to, "¿Deseas algo más?", [BTN_BACK]);
+}
+
+// ---------- MediBot ----------
+async function mediAskArea(to) {
+  set(to, { demo: "medi", step: "area" });
+  return sendButtons(to, "🩺 Indica la especialidad (ej.: Odontología, Pediatría…)", [BTN_BACK]);
+}
+async function mediAskFecha(to, area) {
+  set(to, { step: "fecha", area });
+  return sendButtons(to, "📅 ¿Fecha y hora? (ej.: 21/10 15:00)", [BTN_BACK]);
+}
+async function mediConfirm(to, fecha) {
+  const st = g(to);
+  set(to, { step: "confirmar", fecha });
+  return sendButtons(to, `Confirmar cita *${st.area}* el *${fecha}*`, [
+    { id: "MEDI_OK", title: "✅ Confirmar" },
+    BTN_BACK,
+  ]);
+}
+async function mediFinish(to) {
+  const st = g(to);
+  clear(to);
+  await sendText(to, `✅ *Cita confirmada*\n• Área: *${st.area}*\n• Fecha: *${st.fecha}*`);
+  return sendButtons(to, "¿Deseas otra acción?", [BTN_BACK]);
+}
+
+// ---------- LegalBot (demo simulada) ----------
+async function legalReceive(to, consulta) {
+  return sendButtons(
+    to,
+    `🧠 *Respuesta IA simulada*\nTu consulta: "${consulta}"\n\n` +
+      "👉 En Plan Pro/Premium, LegalBot usa *GPT* para responder y *redactar documentos* conforme a normativa boliviana.",
+    [BTN_BACK]
+  );
+}
+
+// ---------- Webhook VERIFY ----------
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
@@ -136,187 +303,112 @@ app.get("/webhook", (req, res) => {
   return res.sendStatus(403);
 });
 
-// ---------------- Webhook POST ----------------
+// ---------- Webhook POST ----------
 app.post("/webhook", async (req, res) => {
   try {
     const entry  = req.body?.entry?.[0];
-    const change = entry?.changes?.[0]?.value;
+    const value  = entry?.changes?.[0]?.value;
+    if (value?.statuses) return res.sendStatus(200); // delivered/read/etc.
 
-    // 1) Ignora eventos de estado (delivered, read, etc.)
-    if (change?.statuses) return res.sendStatus(200);
-
-    const msg = change?.messages?.[0];
+    const msg = value?.messages?.[0];
     if (!msg) return res.sendStatus(200);
 
-    // 2) Anti-echo
-    const businessPhoneId = change?.metadata?.phone_number_id;
-    if (msg.from === businessPhoneId) return res.sendStatus(200);
-
-    // 3) Anti-duplicados
-    if (alreadySeen(msg.id)) return res.sendStatus(200);
-    remember(msg.id);
-
     const from = msg.from;
+    const businessPhoneId = value?.metadata?.phone_number_id;
+    if (msg.from === businessPhoneId) return res.sendStatus(200); // echo
+    if (dedupe(msg.id)) return res.sendStatus(200);              // duplicado
+
     const type = msg.type;
 
-    // ---- Botones (interactive) ----
+    // ---- Interactive (botones) ----
     if (type === "interactive") {
-      const id =
-        msg.interactive?.button_reply?.id ||
-        msg.interactive?.list_reply?.id;
+      const id = msg.interactive?.button_reply?.id || msg.interactive?.list_reply?.id;
       if (!id) return res.sendStatus(200);
-
-      // Botón global de volver
-      if (id === "MENU_BACK") {
-        await sendMainMenu(from);
-        return res.sendStatus(200);
-      }
+      if (id === "MENU_BACK") { await menuPrincipal(from); return res.sendStatus(200); }
 
       // Menú principal
-      if (id.startsWith("MENU_")) {
-        if (id === "MENU_PLANES")  { await sendPlanes(from);   return res.sendStatus(200); }
-        if (id === "MENU_DEMOS")   { await sendDemos(from);    return res.sendStatus(200); }
-        if (id === "MENU_ASESOR")  { await sendText(from, "📞 Asesor: *+591 72296430*"); return res.sendStatus(200); }
-      }
+      if (id === "MENU_PLANES")  { await menuPlanes(from); return res.sendStatus(200); }
+      if (id === "MENU_DEMOS")   { await menuDemos(from);  return res.sendStatus(200); }
+      if (id === "MENU_ASESOR")  { await sendText(from, "📞 Asesor: *+591 72296430*"); return res.sendStatus(200); }
 
       // Planes
-      if (id.startsWith("PLAN_"))  { await replyPlan(from, id); return res.sendStatus(200); }
-
-      // Demos
-      if (id === "DEMO_FOOD") {
-        setState(from, { demo: "food", step: "menu" });
-        await sendButtons(from, "🍔 *FoodBot*\n¿Qué deseas hacer?", [
-          { id: "FOOD_MENU",   title: "Ver menú"   },
-          { id: "FOOD_PEDIDO", title: "Hacer pedido" },
+      if (["PLAN_BASIC","PLAN_PRO","PLAN_PREMIUM"].includes(id)) {
+        await sendText(from, planesText(id));
+        await sendButtons(from, "¿Deseas contactar a un asesor?", [
+          { id: "MENU_ASESOR", title: "📞 Sí, hablar con asesor" },
+          BTN_BACK,
         ]);
         return res.sendStatus(200);
       }
 
-      if (id === "FOOD_MENU") {
-        setState(from, { demo: "food", step: "pedido" });
-        await sendText(
-          from,
-          "📋 *Menú del día*\n• Salteña — 8 Bs\n• Hamburguesa — 25 Bs\n• Jugo — 10 Bs\n\n✍️ Escribe tu pedido."
-        );
-        return res.sendStatus(200);
-      }
+      // Demos: Intros
+      if (id === "DEMO_FOOD_INTRO")  return demoFoodIntro(from);
+      if (id === "DEMO_MEDI_INTRO")  return demoMediIntro(from);
+      if (id === "DEMO_LEGAL_INTRO") return demoLegalIntro(from);
 
-      if (id === "FOOD_OK") {
-        const st = getState(from);
-        await sendText(from, `✅ Pedido confirmado: ${st.pedido}`);
-        await sendButtons(from, "¿Deseas hacer algo más?", [
-          { id: "MENU_BACK", title: "🔙 Volver al menú" },
-        ]);
-        clearState(from);
-        return res.sendStatus(200);
-      }
+      // FoodBot
+      if (id === "FOOD_MENU")   return foodShowMenu(from);
+      if (id === "FOOD_TIPEAR") return foodAskPedido(from);
+      if (id === "FOOD_PEDIDO") return foodAskPedido(from);
+      if (id === "FOOD_LOCAL")  return foodAskHoraLocal(from);
+      if (id === "FOOD_DELIVERY") return foodAskDireccion(from);
+      if (id === "FOOD_PAGADO") return foodFinish(from);
 
-      if (id === "DEMO_MEDI") {
-        setState(from, { demo: "medi", step: "area" });
-        await sendButtons(from, "🏥 *MediBot*\nIndica especialidad (ej.: Odontología).", [
-          { id: "MENU_BACK", title: "🔙 Volver al menú" },
-        ]);
-        return res.sendStatus(200);
-      }
-
-      if (id === "MEDI_OK") {
-        const st = getState(from);
-        await sendText(from, `✅ Cita confirmada en *${st.area}* el *${st.fecha}*.`);
-        await sendButtons(from, "¿Qué deseas hacer ahora?", [
-          { id: "MENU_BACK", title: "🔙 Volver al menú" },
-        ]);
-        clearState(from);
-        return res.sendStatus(200);
-      }
-
-      if (id === "DEMO_LEGAL") {
-        setState(from, { demo: "legal" });
-        await sendButtons(
-          from,
-          "⚖️ *LegalBot GPT*\nEscribe tu consulta legal.\nEj.: “¿Qué pasa si me despiden sin causa?”",
-          [{ id: "MENU_BACK", title: "🔙 Volver al menú" }]
-        );
-        return res.sendStatus(200);
-      }
+      // MediBot
+      if (id === "MEDI_AREA") return mediAskArea(from);
+      if (id === "MEDI_OK")   return mediFinish(from);
 
       return res.sendStatus(200);
     }
 
     // ---- Texto ----
     if (type === "text") {
-      const txt = (msg.text?.body || "").trim();
-      const low = txt.toLowerCase();
-      const st  = getState(from);
+      const raw = (msg.text?.body || "").trim();
+      const low = raw.toLowerCase();
+      const st  = g(from);
 
-      // Comandos rápidos para volver al menú
-      if (["menu", "menú", "cancelar", "inicio", "start"].includes(low)) {
-        await sendMainMenu(from);
-        return res.sendStatus(200);
-      }
+      // comandos rápidos
+      if (["menu","menú","cancelar","inicio","start"].includes(low)) { await menuPrincipal(from); return res.sendStatus(200); }
+      if (["hola","hola!","hi"].includes(low)) { await menuPrincipal(from); return res.sendStatus(200); }
+      if (low === "planes") { await menuPlanes(from); return res.sendStatus(200); }
+      if (low === "demos")  { await menuDemos(from);  return res.sendStatus(200); }
 
-      // Accesos rápidos por texto
-      if (low === "planes")  { await sendPlanes(from);  return res.sendStatus(200); }
-      if (low === "demos")   { await sendDemos(from);   return res.sendStatus(200); }
-      if (["hola", "hola!", "hi"].includes(low)) {
-        await sendMainMenu(from);
-        return res.sendStatus(200);
-      }
-
-      // --- Flujos ---
-      // FoodBot
+      // Flujos
       if (st.demo === "food") {
         if (st.step === "pedido") {
-          setState(from, { step: "confirmar", pedido: txt });
-          await sendButtons(from, `Confirmar pedido: "${txt}"`, [
-            { id: "FOOD_OK",  title: "OK" },
-            { id: "MENU_BACK", title: "🔙 Volver al menú" },
-          ]);
+          await foodAfterPedido(from, raw);
           return res.sendStatus(200);
         }
-        if (st.step === "menu") {
-          // Si escribe algo en "menu", muéstrale el menú y pasa a "pedido"
-          setState(from, { step: "pedido" });
-          await sendText(
-            from,
-            "📋 *Menú del día*\n• Salteña — 8 Bs\n• Hamburguesa — 25 Bs\n• Jugo — 10 Bs\n\n✍️ Escribe tu pedido."
-          );
+        if (st.step === "hora_local") {
+          await foodConfirmAndPayLocal(from, raw);
+          return res.sendStatus(200);
+        }
+        if (st.step === "direccion") {
+          await foodConfirmAndPayDelivery(from, raw);
           return res.sendStatus(200);
         }
       }
 
-      // MediBot
       if (st.demo === "medi") {
         if (st.step === "area") {
-          setState(from, { step: "fecha", area: txt });
-          await sendButtons(from, "📅 Indica la fecha (ej.: 21/10 15:00).", [
-            { id: "MENU_BACK", title: "🔙 Volver al menú" },
-          ]);
+          await mediAskFecha(from, raw);
           return res.sendStatus(200);
         }
         if (st.step === "fecha") {
-          setState(from, { step: "confirmar", fecha: txt });
-          await sendButtons(from, `Confirmar cita en *${st.area}* el *${txt}*`, [
-            { id: "MEDI_OK",  title: "OK" },
-            { id: "MENU_BACK", title: "🔙 Volver al menú" },
-          ]);
+          await mediConfirm(from, raw);
           return res.sendStatus(200);
         }
       }
 
-      // LegalBot
       if (st.demo === "legal") {
-        await sendButtons(
-          from,
-          `🧠 *Respuesta IA simulada*\nTu consulta: "${txt}"\n\n👉 En Plan Pro/Premium, LegalBot usa GPT para redactar documentos conforme a ley boliviana.`,
-          [{ id: "MENU_BACK", title: "🔙 Volver al menú" }]
-        );
+        await legalReceive(from, raw);
         return res.sendStatus(200);
       }
 
-      // Fallback si no hay flujo activo
+      // fallback
       await sendButtons(
         from,
-        "No te entendí. ¿Qué deseas hacer?",
+        "No te entendí 🙈. ¿Qué deseas hacer?",
         [
           { id: "MENU_PLANES", title: "📦 Ver planes" },
           { id: "MENU_DEMOS",  title: "🎬 Ver demos"  },
@@ -333,8 +425,8 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// Healthcheck
-app.get("/", (_, res) => res.send("✅ SmartBot Bolivia OK"));
+// ---------- Healthcheck ----------
+app.get("/", (_, res) => res.send("✅ SmartBot Bolivia OK con IA"));
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`🚀 SmartBot Bolivia activo en puerto ${PORT}`));
